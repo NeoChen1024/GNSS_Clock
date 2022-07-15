@@ -8,12 +8,12 @@
 #include <Wire.h>
 #include <DS3232RTC.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_PCD8544.h>
 #include <TinyGPSPlus.h>
 #include <TimeLib.h>
 #include "soc/rtc_wdt.h"
 
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+Adafruit_PCD8544 display = Adafruit_PCD8544(25, 33, 32);
 DS3232RTC RTC;
 TinyGPSPlus gps;
 
@@ -73,29 +73,25 @@ void setup() {
 	Serial.begin(115200);	// Debug
 	Serial2.begin(115200); // GPS
 
-	rtc_wdt_set_time(RTC_WDT_STAGE0, 500); // set watchdog timeout to 500ms
-
 	pinMode(RTC_PPS, INPUT);
 	pinMode(GPS_PPS, INPUT);
 	pinMode(LED, OUTPUT);
-	RTC.begin();
-	setSyncProvider(RTC.get);
-	setTime(RTC.get());
-	Serial.println("INIT @" + iso8601time());
 
-	if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-		Serial.println(F("SSD1306 allocation failed"));
-		for(;;);
-	}
+	RTC.begin();
+	setTime(RTC.get());
+
+	Serial.println("INIT @" + iso8601time());
 
 	// init done
 
+	display.begin();
+	display.setContrast(0x40);
 	display.clearDisplay();
 	delay(1000);
-	display.setTextSize(2);
-	display.setTextColor(WHITE);
+	display.setTextSize(1);
+	display.setTextColor(BLACK);
 	display.setCursor(0, 0);
-	display.println("Neo_Chen\n(BX4ACV)\nGNSS Clock v0.01");
+	display.println("Neo_Chen\n(BX4ACV)\nGNSS Clock\nv0.01");
 	display.display();
 	display.setTextSize(1);
 	RTC.squareWave(DS3232RTC::SQWAVE_1_HZ);
@@ -117,12 +113,12 @@ String get_fix_status(void)
 	if(gps.location.isValid())
 	{
 		if(gps.altitude.isValid())
-			status = "3DFIX";
+			status = "3D";
 		else
-			status = "2DFIX";
+			status = "2D";
 	}
 	else
-		status = "NOFIX";
+		status = "NO";
 
 	return status;
 }
@@ -155,6 +151,36 @@ String get_altitude(void)
 		sprintf(buf, "%04.0f", gps.altitude.meters());
 	else
 		sprintf(buf, "????");
+	
+	return String(buf);
+}
+
+String get_speed(void)
+{
+	char buf[10];
+
+	if(gps.speed.isValid())
+	{
+		float speed=gps.speed.kmph();
+		if(speed >= 100.0)
+			sprintf(buf, "%3.0f.", speed);
+		else
+			sprintf(buf, "%2.1f", speed);
+	}
+	else
+		sprintf(buf, "????");
+	
+	return String(buf);
+}
+
+String get_course(void)
+{
+	char buf[10];
+
+	if(gps.course.isValid())
+		sprintf(buf, "%03.0f", gps.course.deg());
+	else
+		sprintf(buf, "???");
 	
 	return String(buf);
 }
@@ -193,30 +219,48 @@ String get_grid(void)
 	return grid;
 }
 
+String weekname[] =
+{ "", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+
 void disp(void)
 {
 	/*
-	20201209T221715+0800
-	T+24.0C H=72% P=1014
-	PL04hf A=0170M [___]
-	GNSS 3DFIX E=0.6 S24
+	┌──────────────┐
+	│2022-06-15 WED│
+	│T22:17:15+0800│
+	│T+24.5 A=0170M│
+	│>10.0kph C^120│
+	│GNSS 3D PL04hf│
+	│E=2.5 S16 [__]│
+	└──────────────┘
 
-	new size: 21x8
+	Size: 14x6
 	*/
 	char buf[32];
 	//Serial.println("ping");
 	display.clearDisplay();
 	display.setCursor(0, 0);
-	display.println(iso8601time());
-	sprintf(buf, "T%+04.1fC H=??%% P=????", gettemp());
+	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()]);
 	display.println(buf);
-	sprintf(buf, "%7sA=%4sM [___]",
+	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
+	display.println(buf);
+	sprintf(buf, "T%+04.1f A=%4sM", gettemp(), get_altitude().c_str());
+	display.println(buf);
+	/*sprintf(buf, "%7sA=%4sM [___]",
 		get_grid().c_str(),
 		get_altitude().c_str());
 	display.println(buf);
-	sprintf(buf, "%4s %5s %5s S%02u",
+	*/
+	sprintf(buf, ">%4skph C^%3s", get_speed(), get_course());
+	display.println(buf);
+	sprintf(buf, "%4s %2s %6s",
 		flags.mode == GPS_MODE ? "GNSS" : "TCXO",
 		get_fix_status().c_str(),
+		get_grid().c_str());
+		//get_accuracy().c_str(),
+		//gps.satellites.value());
+	display.println(buf);
+	sprintf(buf, "%5s S%02u [__]",
 		get_accuracy().c_str(),
 		gps.satellites.value());
 	display.println(buf);
@@ -229,6 +273,7 @@ void loop() {
 		flags.RTC_int = false;
 		if(flags.mode == RTC_MODE)
 		{
+			setTime(RTC.get());
 			disp();
 		}
 		//Serial.print("TCXO: ");
@@ -262,7 +307,6 @@ void loop() {
 		char c = GPS_UART.read();
 		if(gps.encode(c))
 		{
-			//sprintf(buf, "SATS: %d, %s", gps.satellites.value(), gps.location.isValid() ? "VALID" : "INVALID");
 			if(! (gps.location.isValid() && gps.altitude.isValid() && gps.satellites.value() != 0))
 				flags.mode = RTC_MODE;
 		}

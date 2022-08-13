@@ -9,10 +9,15 @@
 #include <DS3232RTC.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 #include <TinyGPSPlus.h>
 #include <TimeLib.h>
 #include "soc/rtc_wdt.h"
 
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+Adafruit_BME280 bme;
 Adafruit_PCD8544 display = Adafruit_PCD8544(25, 33, 32);
 DS3232RTC RTC;
 TinyGPSPlus gps;
@@ -79,10 +84,7 @@ void setup() {
 
 	RTC.begin();
 	setTime(RTC.get());
-
-	Serial.println("INIT @" + iso8601time());
-
-	// init done
+	bme.begin(BME280_ADDRESS_ALTERNATE);
 
 	display.begin();
 	display.setContrast(0x40);
@@ -96,31 +98,29 @@ void setup() {
 	display.setTextSize(1);
 	RTC.squareWave(DS3232RTC::SQWAVE_1_HZ);
 
+	Serial.println("INIT @" + iso8601time());
+
+	// init done
 	delay(3000);
 	attachInterrupt(RTC_PPS, rtcpps, RISING);
 	attachInterrupt(GPS_PPS, gpspps, RISING);
 }
 
-float gettemp(void)
+bool gps_valid(void)
 {
-	return RTC.temperature() / 4.0;
+	return (flags.mode == GPS_MODE);
 }
 
 String get_fix_status(void)
 {
-	String status;
+	char status[10];
 
-	if(gps.location.isValid())
+	if(gps_valid())
 	{
-		if(gps.altitude.isValid())
-			status = "3D";
-		else
-			status = "2D";
+		sprintf(status, "S%02u", gps.satellites.value());
 	}
 	else
-		status = "NO";
-
-	return status;
+		return "N/A";
 }
 
 String get_accuracy(void)
@@ -129,7 +129,7 @@ String get_accuracy(void)
 	String accuracy;
 	float hdop = gps.hdop.hdop();
 
-	if(flags.mode == RTC_MODE)
+	if(! gps_valid())
 		return "E=N/A";
 	
 	if(hdop >= 10.0)
@@ -146,11 +146,21 @@ String get_accuracy(void)
 String get_altitude(void)
 {
 	char buf[10];
+	double alt = 0;
 
-	if(gps.altitude.isValid())
-		sprintf(buf, "%04.0f", gps.altitude.meters());
+	if(gps_valid())
+	{
+		alt = gps.altitude.meters();
+	}
 	else
-		sprintf(buf, "????");
+	{
+		alt = bme.readAltitude(SEALEVELPRESSURE_HPA);
+	}
+
+	if(alt >= 10000.0)
+		sprintf(buf, "A%05.0fM", alt);
+	else
+		sprintf(buf, "A=%04.0fM", alt);
 	
 	return String(buf);
 }
@@ -159,7 +169,7 @@ String get_speed(void)
 {
 	char buf[10];
 
-	if(gps.speed.isValid())
+	if(gps_valid())
 	{
 		float speed=gps.speed.kmph();
 		if(speed >= 100.0)
@@ -177,7 +187,7 @@ String get_course(void)
 {
 	char buf[10];
 
-	if(gps.course.isValid())
+	if(gps_valid())
 		sprintf(buf, "%03.0f", gps.course.deg());
 	else
 		sprintf(buf, "???");
@@ -195,7 +205,7 @@ String get_grid(void)
 	int32_t lng = floor((gps.location.lng() + 180.0) * 12);
 	int32_t lat = floor((gps.location.lat() + 90) * 24);
 
-	if(gps.location.isValid())
+	if(gps_valid())
 	{
 		grid[5] = grid_subsquare[lat % 24];
 		grid[4] = grid_subsquare[lng % 24];
@@ -229,14 +239,17 @@ void disp(void)
 	│2022-06-15 WED│
 	│T22:17:15+0800│
 	│T+24.5 A=0170M│
+	│P=0985.3 H=63%│
 	│>10.0kph C^120│
-	│GNSS 3D PL04hf│
-	│E=2.5 S16 [__]│
+	│GPS S12 PL04hf│
 	└──────────────┘
 
 	Size: 14x6
 	*/
 	char buf[32];
+	float humidity = bme.readHumidity();
+	if(humidity > 99.0)
+		humidity = 99.0;
 	//Serial.println("ping");
 	display.clearDisplay();
 	display.setCursor(0, 0);
@@ -244,25 +257,16 @@ void disp(void)
 	display.println(buf);
 	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
 	display.println(buf);
-	sprintf(buf, "T%+04.1f A=%4sM", gettemp(), get_altitude().c_str());
+	sprintf(buf, "T%+04.1f %7s", bme.readTemperature(), get_altitude().c_str());
 	display.println(buf);
-	/*sprintf(buf, "%7sA=%4sM [___]",
-		get_grid().c_str(),
-		get_altitude().c_str());
+	sprintf(buf, "P=%06.1f H=%2.0f%%", bme.readPressure() / 100.0, humidity);
 	display.println(buf);
-	*/
 	sprintf(buf, ">%4skph C^%3s", get_speed(), get_course());
 	display.println(buf);
-	sprintf(buf, "%4s %2s %6s",
-		flags.mode == GPS_MODE ? "GNSS" : "TCXO",
+	sprintf(buf, "%3s %3s %6s",
+		flags.mode == GPS_MODE ? "GPS" : "RTC",
 		get_fix_status().c_str(),
 		get_grid().c_str());
-		//get_accuracy().c_str(),
-		//gps.satellites.value());
-	display.println(buf);
-	sprintf(buf, "%5s S%02u [__]",
-		get_accuracy().c_str(),
-		gps.satellites.value());
 	display.println(buf);
 	display.display(); 
 }

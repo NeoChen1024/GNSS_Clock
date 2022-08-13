@@ -172,10 +172,12 @@ String get_speed(void)
 	if(gps_valid())
 	{
 		float speed=gps.speed.kmph();
-		if(speed >= 100.0)
-			sprintf(buf, "%3.0f.", speed);
-		else
-			sprintf(buf, "%2.1f", speed);
+		if(speed < 100.0)
+			sprintf(buf, "%04.1f", speed);
+		else if(speed < 1000.0)
+			sprintf(buf, "%03.0f.", speed);
+		else // speed > 1000kph
+			sprintf(buf, "%04.0f", speed);
 	}
 	else
 		sprintf(buf, "????");

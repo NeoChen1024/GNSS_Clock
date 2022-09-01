@@ -26,3 +26,6 @@ BOM:
 * Any GNSS Receiver
 * DS3231
 * BME280
+
+Note:
+From PPS triggering to actual display refresh has about 8ms of latency

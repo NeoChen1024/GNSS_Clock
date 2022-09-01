@@ -89,11 +89,10 @@ void setup() {
 	display.begin();
 	display.setContrast(0x40);
 	display.clearDisplay();
-	delay(1000);
 	display.setTextSize(1);
 	display.setTextColor(BLACK);
 	display.setCursor(0, 0);
-	display.println("Neo_Chen\n(BX4ACV)\nGNSS Clock\nv0.01");
+	display.println("BX4ACV's\nHigh Precision\nGNSS Clock\nv0.1");
 	display.display();
 	display.setTextSize(1);
 	RTC.squareWave(DS3232RTC::SQWAVE_1_HZ);
@@ -102,8 +101,11 @@ void setup() {
 
 	// init done
 	delay(3000);
+
 	attachInterrupt(RTC_PPS, rtcpps, RISING);
 	attachInterrupt(GPS_PPS, gpspps, RISING);
+
+	display.clearDisplay();
 }
 
 bool gps_valid(void)
@@ -118,35 +120,16 @@ String get_fix_status(void)
 	if(gps_valid())
 	{
 		sprintf(status, "S%02u", gps.satellites.value());
+		return String(status);
 	}
 	else
 		return "N/A";
 }
 
-String get_accuracy(void)
-{
-	char buf[10];
-	String accuracy;
-	float hdop = gps.hdop.hdop();
-
-	if(! gps_valid())
-		return "E=N/A";
-	
-	if(hdop >= 10.0)
-	{
-		sprintf(buf, "E%02.1f", hdop);
-	}
-	else
-	{
-		sprintf(buf, "E=%01.1f", hdop);
-	}
-	return String(buf);
-}
-
 String get_altitude(void)
 {
-	char buf[10];
-	double alt = 0;
+	char buf[16];
+	float alt = 0;
 
 	if(gps_valid())
 	{
@@ -207,7 +190,7 @@ String get_grid(void)
 	int32_t lng = floor((gps.location.lng() + 180.0) * 12);
 	int32_t lat = floor((gps.location.lat() + 90) * 24);
 
-	if(gps_valid())
+	if(gps_valid() && gps.location.isValid())
 	{
 		grid[5] = grid_subsquare[lat % 24];
 		grid[4] = grid_subsquare[lng % 24];
@@ -248,56 +231,62 @@ void disp(void)
 
 	Size: 14x6
 	*/
+
 	char buf[32];
 	float humidity = bme.readHumidity();
+
 	if(humidity > 99.0)
 		humidity = 99.0;
-	//Serial.println("ping");
+
 	display.clearDisplay();
 	display.setCursor(0, 0);
+
 	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()]);
 	display.println(buf);
+
 	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
 	display.println(buf);
+
 	sprintf(buf, "T%+04.1f %7s", bme.readTemperature(), get_altitude().c_str());
 	display.println(buf);
+
 	sprintf(buf, "P=%06.1f H=%2.0f%%", bme.readPressure() / 100.0, humidity);
 	display.println(buf);
+
 	sprintf(buf, ">%4skph C^%3s", get_speed(), get_course());
 	display.println(buf);
+
 	sprintf(buf, "%3s %3s %6s",
 		flags.mode == GPS_MODE ? "GPS" : "RTC",
 		get_fix_status().c_str(),
 		get_grid().c_str());
 	display.println(buf);
+
 	display.display(); 
 }
 
-void loop() {
-	if(flags.RTC_int)
-	{
-		flags.RTC_int = false;
-		if(flags.mode == RTC_MODE)
-		{
-			setTime(RTC.get());
-			disp();
-		}
-		//Serial.print("TCXO: ");
-		//Serial.println(String(flags.RTC_pps) + ", millis=" + String(millis()));
-	}
-
+void loop()
+{
 	if(flags.GPS_int)
 	{
 		flags.GPS_int = false;
 		flags.RTC_pps = 0;
-		if(gps.location.isValid())
-		{
-			flags.mode = GPS_MODE;
+		flags.mode = GPS_MODE;
 
-			setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
-				gps.date.day(), gps.date.month(), gps.date.year());
-			adjustTime(SECS_PER_HOUR * (TIMEZONE/100) + (TIMEZONE%100) * 60 + 1); // +1 because pps comes before NMEA sentences
-			RTC.set(now());
+		setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
+			gps.date.day(), gps.date.month(), gps.date.year());
+		adjustTime(SECS_PER_HOUR * (TIMEZONE/100) + (TIMEZONE%100) * 60 + 1); // +1 because PPS comes before NMEA sentences
+		disp();
+		RTC.set(now()); // set time to RTC later, to reduce display latency
+	}
+
+	if(flags.RTC_int)
+	{
+		flags.RTC_int = false;
+
+		if(flags.mode == RTC_MODE)
+		{
+			setTime(RTC.get());
 			disp();
 		}
 	}

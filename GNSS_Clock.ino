@@ -241,7 +241,7 @@ void disp(void)
 	display.clearDisplay();
 	display.setCursor(0, 0);
 
-	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()]);
+	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()].c_str());
 	display.println(buf);
 
 	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
@@ -253,7 +253,7 @@ void disp(void)
 	sprintf(buf, "P=%06.1f H=%2.0f%%", bme.readPressure() / 100.0, humidity);
 	display.println(buf);
 
-	sprintf(buf, ">%4skph C^%3s", get_speed(), get_course());
+	sprintf(buf, ">%4skph C^%3s", get_speed().c_str(), get_course().c_str());
 	display.println(buf);
 
 	sprintf(buf, "%3s %3s %6s",
@@ -300,6 +300,7 @@ void loop()
 	if(GPS_UART.available() > 0)
 	{
 		char c = GPS_UART.read();
+		//Serial.print(c);
 		if(gps.encode(c))
 		{
 			if(! (gps.location.isValid() && gps.altitude.isValid() && gps.satellites.value() != 0))

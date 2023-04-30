@@ -99,7 +99,7 @@ void setup() {
 	display.clearDisplay();
 	display.setTextSize(1);
 	display.setCursor(0, 0);
-  display.setTextColor(SSD1306_WHITE);
+	display.setTextColor(SSD1306_WHITE);
 	display.println("BX4ACV's\nHigh Precision\nGNSS Clock\nv0.1");
 	display.display();
 
@@ -188,9 +188,9 @@ String get_course(void)
 	return String(buf);
 }
 
-PROGMEM char grid_field[] = "ABCDEFGHIJKLMNOPQR";
-PROGMEM char grid_square[] = "0123456789";
-PROGMEM char grid_subsquare[] = "abcdefghijklmnopqrstuvwx";
+static const char grid_field[] = "ABCDEFGHIJKLMNOPQR";
+static const char grid_square[] = "0123456789";
+static const char grid_subsquare[] = "abcdefghijklmnopqrstuvwx";
 
 String get_grid(void)
 {
@@ -316,6 +316,7 @@ void loop()
 	{
 		char c = GPS_UART.read();
 		Serial.print(c);
+
 		if(gps.encode(c))
 		{
 			if(! (gps.location.isValid() && gps.altitude.isValid() && gps.satellites.value() != 0))

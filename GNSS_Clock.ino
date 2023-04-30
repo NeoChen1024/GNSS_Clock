@@ -2,34 +2,35 @@
  * Neo_Chen's GNSS Clock w/RTC backup & fast fallback
  */
 
-// Hardware: ESP32, NodeMCU-32S
+// Hardware: Raspberry Pi Pico (RP2040)
+// Configs
+
+#define TIMEZONE 800	// UTC+8:00
+#define GPS_PPS	11
+#define RTC_PPS	10
+#define LED	25
+#define BTN	24
+#define OLED_ADDR	0x3C
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <DS3232RTC.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_PCD8544.h>
+#include <Adafruit_SSD1306.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <TinyGPSPlus.h>
 #include <TimeLib.h>
-#include "soc/rtc_wdt.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 Adafruit_BME280 bme;
-Adafruit_PCD8544 display = Adafruit_PCD8544(25, 33, 32);
+Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64);
 DS3232RTC RTC;
 TinyGPSPlus gps;
 
-// Definitions
 
-#define TIMEZONE 800	// UTC+8:00
-#define GPS_PPS	39
-#define RTC_PPS	36
-#define LED	2
-
-#define GPS_UART	Serial2
+#define GPS_UART	Serial1
 
 enum modes
 {
@@ -51,13 +52,13 @@ struct flags
 
 // ISRs
 
-void IRAM_ATTR rtcpps(void)
+void rtcpps(void)
 {
 	flags.RTC_int = true;
 	flags.RTC_pps++;
 }
 
-void IRAM_ATTR gpspps(void)
+void gpspps(void)
 {
 	flags.GPS_int = true;
 }
@@ -75,26 +76,33 @@ String iso8601time(void)
 // Init
 
 void setup() {
+	Wire.begin();
 	Serial.begin(115200);	// Debug
-	Serial2.begin(115200); // GPS
+	GPS_UART.setRX(13);
+	GPS_UART.setTX(12);
+	GPS_UART.begin(115200);
 
-	pinMode(RTC_PPS, INPUT);
-	pinMode(GPS_PPS, INPUT);
+	pinMode(RTC_PPS, INPUT_PULLUP);
+	pinMode(GPS_PPS, INPUT_PULLUP);
 	pinMode(LED, OUTPUT);
+	pinMode(BTN, INPUT_PULLUP);
 
 	RTC.begin();
 	setTime(RTC.get());
 	bme.begin(BME280_ADDRESS_ALTERNATE);
 
-	display.begin();
-	display.setContrast(0x40);
+	if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR))
+	{
+		Serial.println("SSD1306 initialization failed!");
+		while(1);
+	}
 	display.clearDisplay();
 	display.setTextSize(1);
-	display.setTextColor(BLACK);
 	display.setCursor(0, 0);
+  display.setTextColor(SSD1306_WHITE);
 	display.println("BX4ACV's\nHigh Precision\nGNSS Clock\nv0.1");
 	display.display();
-	display.setTextSize(1);
+
 	RTC.squareWave(DS3232RTC::SQWAVE_1_HZ);
 
 	Serial.println("INIT @" + iso8601time());
@@ -119,7 +127,7 @@ String get_fix_status(void)
 
 	if(gps_valid())
 	{
-		sprintf(status, "S%02u", gps.satellites.value());
+		sprintf(status, "S%02lu", gps.satellites.value());
 		return String(status);
 	}
 	else
@@ -240,27 +248,34 @@ void disp(void)
 
 	display.clearDisplay();
 	display.setCursor(0, 0);
+	Serial.println("==============");
 
-	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()]);
+	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()].c_str());
 	display.println(buf);
+	Serial.println(buf);
 
 	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
 	display.println(buf);
+	Serial.println(buf);
 
 	sprintf(buf, "T%+04.1f %7s", bme.readTemperature(), get_altitude().c_str());
 	display.println(buf);
+	Serial.println(buf);
 
 	sprintf(buf, "P=%06.1f H=%2.0f%%", bme.readPressure() / 100.0, humidity);
 	display.println(buf);
+	Serial.println(buf);
 
-	sprintf(buf, ">%4skph C^%3s", get_speed(), get_course());
+	sprintf(buf, ">%4skph C^%3s", get_speed().c_str(), get_course().c_str());
 	display.println(buf);
+	Serial.println(buf);
 
 	sprintf(buf, "%3s %3s %6s",
 		flags.mode == GPS_MODE ? "GPS" : "RTC",
 		get_fix_status().c_str(),
 		get_grid().c_str());
 	display.println(buf);
+	Serial.println(buf);
 
 	display.display(); 
 }
@@ -300,10 +315,12 @@ void loop()
 	if(GPS_UART.available() > 0)
 	{
 		char c = GPS_UART.read();
+		Serial.print(c);
 		if(gps.encode(c))
 		{
 			if(! (gps.location.isValid() && gps.altitude.isValid() && gps.satellites.value() != 0))
 				flags.mode = RTC_MODE;
 		}
 	}
+
 }

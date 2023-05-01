@@ -10,25 +10,25 @@
 #define RTC_PPS	10
 #define LED	25
 #define BTN	24
-#define OLED_ADDR	0x3C
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <SPI.h>
 #include <DS3232RTC.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_PCD8544.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <TinyGPSPlus.h>
 #include <TimeLib.h>
+#include "tiny4x5font.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 Adafruit_BME280 bme;
-Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64);
+Adafruit_PCD8544 display = Adafruit_PCD8544(20, 21, 22);
 DS3232RTC RTC;
 TinyGPSPlus gps;
-
 
 #define GPS_UART	Serial1
 
@@ -38,17 +38,26 @@ enum modes
 	RTC_MODE
 };
 
+enum views
+{
+	DATE_TIME,
+	MORE_SENSORS,
+	SAT_SKYVIEW,
+	VIEWS
+};
+
 // Global flags
 
-struct flags
+struct flags_s
 {
-	volatile bool RTC_int;
-	volatile bool GPS_int;
-	volatile int RTC_pps;
-	volatile enum modes mode;
-} flags = { false, false, 0, RTC_MODE };
+	bool RTC_int;
+	bool GPS_int;
+	int RTC_pps;
+	enum modes mode;
+	int views;
+};
 
-
+volatile struct flags_s flags = { false, false, 0, RTC_MODE, DATE_TIME };
 
 // ISRs
 
@@ -77,6 +86,7 @@ String iso8601time(void)
 
 void setup() {
 	Wire.begin();
+	SPI.begin();
 	Serial.begin(115200);	// Debug
 	GPS_UART.setRX(13);
 	GPS_UART.setTX(12);
@@ -91,17 +101,19 @@ void setup() {
 	setTime(RTC.get());
 	bme.begin(BME280_ADDRESS_ALTERNATE);
 
-	if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR))
-	{
-		Serial.println("SSD1306 initialization failed!");
-		while(1);
-	}
+	display.begin();
+	display.setContrast(0x40);
 	display.clearDisplay();
+	//display.setFont(&tiny4x5font);
 	display.setTextSize(1);
+	display.setTextColor(BLACK);
 	display.setCursor(0, 0);
-	display.setTextColor(SSD1306_WHITE);
-	display.println("BX4ACV's\nHigh Precision\nGNSS Clock\nv0.1");
+	display.println("BU4AK's");
+	display.println("High Precision");
+	display.println("GNSS Clock");
+	display.println("v0.1");
 	display.display();
+	display.setTextSize(1);
 
 	RTC.squareWave(DS3232RTC::SQWAVE_1_HZ);
 
@@ -110,10 +122,10 @@ void setup() {
 	// init done
 	delay(3000);
 
+	display.clearDisplay();
+
 	attachInterrupt(RTC_PPS, rtcpps, RISING);
 	attachInterrupt(GPS_PPS, gpspps, RISING);
-
-	display.clearDisplay();
 }
 
 bool gps_valid(void)
@@ -223,10 +235,16 @@ String get_grid(void)
 }
 
 String weekname[] =
-{ "", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+{ "XXX", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
 
-void disp(void)
+void timedate_display(void)
 {
+	char buf[32];
+	float humidity = bme.readHumidity();
+
+	if(humidity > 99.0)
+		humidity = 99.0;
+
 	/*
 	┌──────────────┐
 	│2022-06-15 WED│
@@ -239,16 +257,6 @@ void disp(void)
 
 	Size: 14x6
 	*/
-
-	char buf[32];
-	float humidity = bme.readHumidity();
-
-	if(humidity > 99.0)
-		humidity = 99.0;
-
-	display.clearDisplay();
-	display.setCursor(0, 0);
-	Serial.println("==============");
 
 	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()].c_str());
 	display.println(buf);
@@ -276,8 +284,36 @@ void disp(void)
 		get_grid().c_str());
 	display.println(buf);
 	Serial.println(buf);
+}
 
-	display.display(); 
+void tick(void)
+{
+	display.clearDisplay();
+	display.setCursor(0, 0);
+
+	// Detect button here so we can skip implementing asynchronous debounce
+	if(digitalRead(BTN) == LOW)
+	{
+		flags.views++;
+		flags.views %= VIEWS;
+	}
+
+	Serial.println("==============");
+
+	switch(flags.views)
+	{
+		case DATE_TIME:
+			timedate_display();
+			break;
+		case MORE_SENSORS:
+			display.println("MORE_SENSORS");
+			break;
+		case SAT_SKYVIEW:
+			display.println("SAT_SKYVIEW");
+			break;
+	}
+
+	display.display();
 }
 
 void loop()
@@ -287,12 +323,12 @@ void loop()
 		flags.GPS_int = false;
 		flags.RTC_pps = 0;
 		flags.mode = GPS_MODE;
-
 		setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
 			gps.date.day(), gps.date.month(), gps.date.year());
 		adjustTime(SECS_PER_HOUR * (TIMEZONE/100) + (TIMEZONE%100) * 60 + 1); // +1 because PPS comes before NMEA sentences
-		disp();
-		RTC.set(now()); // set time to RTC later, to reduce display latency
+		tick();
+		// set RTC time later to reduce display latency (assuming the time it takes to draw on display is much less than 1s)
+		RTC.set(now());
 	}
 
 	if(flags.RTC_int)
@@ -302,7 +338,7 @@ void loop()
 		if(flags.mode == RTC_MODE)
 		{
 			setTime(RTC.get());
-			disp();
+			tick();
 		}
 	}
 

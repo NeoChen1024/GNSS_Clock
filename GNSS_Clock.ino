@@ -21,6 +21,8 @@
 #include <Adafruit_BME280.h>
 #include <TinyGPSPlus.h>
 #include <TimeLib.h>
+#include <AsyncDelay.h>
+#include "pico/stdlib.h"
 #include "tiny4x5font.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
@@ -61,13 +63,13 @@ volatile struct flags_s flags = { false, false, 0, RTC_MODE, DATE_TIME };
 
 // ISRs
 
-void rtcpps(void)
+void __not_in_flash_func(rtcpps)(void)
 {
 	flags.RTC_int = true;
 	flags.RTC_pps++;
 }
 
-void gpspps(void)
+void __not_in_flash_func(gpspps)(void)
 {
 	flags.GPS_int = true;
 }
@@ -254,40 +256,68 @@ void timedate_display(void)
 	│>10.0kph C^120│
 	│GPS S12 PL04hf│
 	└──────────────┘
-
-	Size: 14x6
 	*/
 
 	sprintf(buf, "%04u-%02u-%02u %3s", year(), month(), day(), weekname[weekday()].c_str());
 	display.println(buf);
-	Serial.println(buf);
 
 	sprintf(buf, "T%02u:%02u:%02u%+05d", hour(), minute(), second(), TIMEZONE);
 	display.println(buf);
-	Serial.println(buf);
 
 	sprintf(buf, "T%+04.1f %7s", bme.readTemperature(), get_altitude().c_str());
 	display.println(buf);
-	Serial.println(buf);
 
 	sprintf(buf, "P=%06.1f H=%2.0f%%", bme.readPressure() / 100.0, humidity);
 	display.println(buf);
-	Serial.println(buf);
 
 	sprintf(buf, ">%4skph C^%3s", get_speed().c_str(), get_course().c_str());
 	display.println(buf);
-	Serial.println(buf);
 
 	sprintf(buf, "%3s %3s %6s",
 		flags.mode == GPS_MODE ? "GPS" : "RTC",
 		get_fix_status().c_str(),
 		get_grid().c_str());
 	display.println(buf);
-	Serial.println(buf);
 }
+
+void more_sensors(void)
+{
+	char buf[32];
+	/*
+	TODO: Wait for the arrival of AS3935 & CCS811 modules
+	┌──────────────┐
+	│OD 29 ▁▂▃▄▅▆▇█│
+	│R= 1km [D]  ↯↯│
+	│LAST: R14 E12 │
+	│CO2 =   800ppm│
+	│VOC =   240ppb│
+	│RTC T+23.5C   │
+	└──────────────┘
+	DX: indoor, OD: outdoor
+	29 -> log10 of the 20bit "energy" value
+	[D] / [N] / [ ] -> Disturb / Noise Floor / None
+	↯↯ / ☁☁ -> Lightning Detected / None
+	R14 -> Last event range
+	E12 -> Last event energy
+	RTC T -> RTC temperature (Just a random placeholder)
+	*/
+	sprintf(buf, "RTC T%+04.1f", RTC.temperature() / 4.0);
+	display.println(buf);
+	display.println("Coming Soon...");
+}
+
+void sat_skyview(void)
+{
+	// TODO
+	display.println("SAT_SKYVIEW");
+}
+
+AsyncDelay pps_led_off_delay;
 
 void tick(void)
 {
+	pps_led_off_delay.start(100, AsyncDelay::MILLIS);
+	digitalWrite(LED, HIGH);
 	display.clearDisplay();
 	display.setCursor(0, 0);
 
@@ -298,22 +328,24 @@ void tick(void)
 		flags.views %= VIEWS;
 	}
 
-	Serial.println("==============");
-
 	switch(flags.views)
 	{
 		case DATE_TIME:
 			timedate_display();
 			break;
 		case MORE_SENSORS:
-			display.println("MORE_SENSORS");
+			more_sensors();
 			break;
 		case SAT_SKYVIEW:
-			display.println("SAT_SKYVIEW");
+			sat_skyview();
 			break;
+		default:
+			display.println("Invalid Mode");
 	}
 
 	display.display();
+
+	Serial.println(iso8601time());
 }
 
 void loop()
@@ -327,7 +359,6 @@ void loop()
 			gps.date.day(), gps.date.month(), gps.date.year());
 		adjustTime(SECS_PER_HOUR * (TIMEZONE/100) + (TIMEZONE%100) * 60 + 1); // +1 because PPS comes before NMEA sentences
 		tick();
-		// set RTC time later to reduce display latency (assuming the time it takes to draw on display is much less than 1s)
 		RTC.set(now());
 	}
 
@@ -351,13 +382,21 @@ void loop()
 	if(GPS_UART.available() > 0)
 	{
 		char c = GPS_UART.read();
-		Serial.print(c);
+		//Serial.print(c);
 
 		if(gps.encode(c))
 		{
+			// does not work as intended, considering to replace TinyGPS++ lib
 			if(! (gps.location.isValid() && gps.altitude.isValid() && gps.satellites.value() != 0))
 				flags.mode = RTC_MODE;
 		}
 	}
 
+	if(pps_led_off_delay.isExpired())
+	{
+		digitalWrite(LED, LOW);
+
+		// TODO: ugly hack, fix later
+		pps_led_off_delay.start(5000, AsyncDelay::MILLIS); // Set to restart long after next trigger
+	}
 }
